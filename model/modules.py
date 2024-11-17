@@ -311,13 +311,13 @@ class TimestepEmbedding(nn.Module):
     def __init__(self, dim: int, freq_embed_dim: int = 256):
         super().__init__()
         self.time2emb = SinusPositionEmbedding(freq_embed_dim)
-        self.time_emb = nn.Linear(freq_embed_dim, dim)
+        self.time_proj = nn.Linear(freq_embed_dim, dim)
         self.act = nn.SiLU()
         self.proj = nn.Linear(dim, dim)
 
     def forward(self, timestep: Float[torch.Tensor, "b"]) -> Float[torch.Tensor, "b d"]:
         time = self.time2emb(timestep)
-        time = self.time_emb(time)
+        time = self.time_proj(time)
         time = self.act(time)
         time = self.proj(time)
         return time

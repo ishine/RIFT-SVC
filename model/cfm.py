@@ -20,7 +20,7 @@ from model.utils import (
 class CFM(nn.Module):
     def __init__(
         self,
-        transformer: nn.Module,
+        model: nn.Module,
         sigma: float = 0.,
         odeint_kwargs: dict = dict(
             method='euler'  # 'midpoint'
@@ -35,9 +35,8 @@ class CFM(nn.Module):
         # Unconditional guiding
         self.spk_drop_prob = spk_drop_prob
 
-        # Transformer
-        self.transformer = transformer
-        dim = transformer.dim
+        self.model = model
+        dim = model.dim
         self.dim = dim
 
         # Condition flow related parameters
@@ -79,7 +78,7 @@ class CFM(nn.Module):
         # Define the ODE function
         def fn(t, x):
             # Predict flow
-            pred = self.transformer(
+            pred = self.model(
                 x=x, 
                 spk=spk_id, 
                 f0=f0, 
@@ -92,7 +91,7 @@ class CFM(nn.Module):
             if cfg_strength < 1e-5:
                 return pred
             
-            null_pred = self.transformer(
+            null_pred = self.model(
                 x=x, 
                 spk=spk_id, 
                 f0=f0, 
@@ -168,7 +167,7 @@ class CFM(nn.Module):
         drop_spk = random.random() < self.spk_drop_prob  # Adjusted for DiT's drop_spk
 
         # Call Transformer
-        pred = self.transformer(
+        pred = self.model(
             x=φ, 
             spk=spk_id, 
             f0=f0, 

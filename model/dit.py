@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -12,6 +14,7 @@ from model.modules import (
     AdaLayerNormZero_Final,
 )
 
+BASE_DIM = 256
 
 # Conditional embedding for f0, rms, cvec
 
@@ -61,7 +64,7 @@ class InputEmbedding(nn.Module):
 class DiT(nn.Module):
     def __init__(self,
                  dim: int, depth: int, head_dim: int, dropout: float = 0.1, ff_mult: int = 4,
-                 mel_dim: int = 128, num_speaker: int = 1, cvec_dim: int = 768):
+                 mel_dim: int = 128, num_speaker: int = 1, cvec_dim: int = 768, init_std: float = 0.02, mup_enabled: bool = False):
         super().__init__()
 
         self.num_speaker = num_speaker
@@ -75,7 +78,6 @@ class DiT(nn.Module):
 
         self.dim = dim
         self.depth = depth
-
         self.transformer_blocks = nn.ModuleList(
             [
                 DiTBlock(
@@ -87,14 +89,24 @@ class DiT(nn.Module):
                 for _ in range(depth)
             ]
         )
-        
+
         self.norm_out = AdaLayerNormZero_Final(dim)  # final modulation
         self.output = nn.Linear(dim, mel_dim)
+
+        self.init_std = init_std
+        ## mup
+        self.mup_enabled = mup_enabled
+        self.mup_multipler = self.dim / BASE_DIM
 
         self.apply(self._init_weights)
         for block in self.transformer_blocks:
             torch.nn.init.constant_(block.attn_norm.proj.weight, 0)
             torch.nn.init.constant_(block.attn_norm.proj.bias, 0)
+
+            if self.mup_enabled:
+                depth_std = self.init_std / math.sqrt(2 * self.depth * self.mup_multipler)
+                torch.nn.init.normal_(block.attn.attn_out.weight, mean=0.0, std=depth_std)
+                torch.nn.init.normal_(block.mlp.mlp_out.weight, mean=0.0, std=depth_std)
 
         torch.nn.init.constant_(self.norm_out.proj.weight, 0)
         torch.nn.init.constant_(self.norm_out.proj.bias, 0)
@@ -103,11 +115,12 @@ class DiT(nn.Module):
 
     def _init_weights(self, module: nn.Module):
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            init_std = self.init_std / self.mup_multipler if self.mup_enabled else self.init_std
+            torch.nn.init.normal_(module.weight, mean=0.0, std=init_std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=self.init_std)
 
 
     def forward(
@@ -142,6 +155,8 @@ class DiT(nn.Module):
             x = block(x, t, mask = mask, rope = rope)
 
         x = self.norm_out(x, t)
+        if self.mup_enabled:
+            x = x / self.mup_multipler
         output = self.output(x)
 
         return output

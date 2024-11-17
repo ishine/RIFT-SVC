@@ -51,6 +51,37 @@ class CustomProgressBar(TQDMProgressBar):
         })
 
 
+def configure_optimizer(model, lr, betas, weight_decay, warmup_steps, mup_enabled=False):
+    if mup_enabled:
+        param_dict = {pn: p for pn, p in model.named_parameters() if p.requires_grad}
+        mup_decay_params = []
+        decay_params = []
+        nodecay_params = []
+        for n, p in param_dict.items():
+            if p.dim() >= 2:
+                if n.endswith('out.weight') or n.endswith('proj.weight'):
+                    mup_decay_params.append(p)
+                else:
+                    decay_params.append(p)
+            else:
+                nodecay_params.append(p)
+        optim_groups = [
+            {'params': mup_decay_params, 'weight_decay': weight_decay, 'lr': lr / model.model.mup_multipler},
+            {'params': decay_params, 'weight_decay': weight_decay, 'lr': lr},
+            {'params': nodecay_params, 'weight_decay': 0.0, 'lr': lr}
+        ]
+        optimizer = AdamWScheduleFree(optim_groups, betas=betas, warmup_steps=warmup_steps)
+    else:
+        optimizer = AdamWScheduleFree(
+            model.parameters(),
+            lr=lr,
+            betas=betas,
+            weight_decay=weight_decay,
+            warmup_steps=warmup_steps,
+        )
+    return optimizer
+
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
     pl.seed_everything(cfg.seed)
@@ -68,24 +99,25 @@ def main(cfg: DictConfig):
         split="test"
     )
 
-    transformer = DiT(
+    dit = DiT(
         **cfg.model.cfg,
         num_speaker=train_dataset.num_speakers,
         mel_dim=cfg.dataset.n_mel_channels,
     )
 
     cfm = CFM(
-        transformer=transformer,
+        model=dit,
         num_mel_channels=cfg.dataset.n_mel_channels,
     )
 
     warmup_steps = int(cfg.training.max_steps * cfg.training.warmup_ratio)
-    optimizer = AdamWScheduleFree(
-        cfm.parameters(),
+    optimizer = configure_optimizer(
+        model=cfm,
         lr=cfg.training.learning_rate,
         betas=eval(cfg.training.betas),
         weight_decay=cfg.training.weight_decay,
         warmup_steps=warmup_steps,
+        mup_enabled=cfg.training.mup_enabled,
     )
     model = RIFTSVCLightningModule(
         model=cfm,
