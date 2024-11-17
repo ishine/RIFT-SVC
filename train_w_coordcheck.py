@@ -99,6 +99,7 @@ def main(cfg: DictConfig):
         split="test"
     )
 
+    print(f"mup_enabled: {cfg.training.mup_enabled}")
     dit = DiT(
         **cfg.model.cfg,
         num_speaker=train_dataset.num_speakers,
@@ -106,12 +107,49 @@ def main(cfg: DictConfig):
         mup_enabled=cfg.training.mup_enabled,
     )
 
+    from collections import defaultdict
+    from functools import partial
+    from model.modules import DiTBlock
+    coord_check_dict = defaultdict(list)
+    def hook(module, input, output, key):
+        coord_check_dict[key].append(output.abs().mean().item())
+    coord_check_handles = []
+    for module_name, module in dit.named_modules():
+        if module_name.endswith('input_embed'):
+            coord_check_handles.append(module.register_forward_hook(partial(hook, key='input_embed')))
+        elif module_name.endswith('attn'):
+            block_idx = module_name.split('.')[1]
+            coord_check_handles.append(module.register_forward_hook(partial(hook, key=f'attn_{block_idx}')))
+        elif module_name.endswith('mlp'):
+            block_idx = module_name.split('.')[1]
+            coord_check_handles.append(module.register_forward_hook(partial(hook, key=f'mlp_{block_idx}')))
+        elif module_name.endswith('output'):
+            coord_check_handles.append(module.register_forward_hook(partial(hook, key='output')))
+        elif 'transformer_blocks' in module_name and isinstance(module, DiTBlock):
+            block_idx = module_name.split('.')[-1]
+            coord_check_handles.append(module.register_forward_hook(partial(hook, key=f'block_{block_idx}')))
+    
+    import os
+    import torch
+    def save_coord_check_dict():
+        print("\nSaving coordination check dictionary...")
+        os.makedirs('coord_check', exist_ok=True)
+        if cfg.training.mup_enabled:
+            postfix = 'mup'
+        else:
+            postfix = 'sp'
+        save_path = os.path.join('coord_check', f'coord_check_dict_{dit.dim}-{dit.depth}_{postfix}.pt')
+        torch.save(dict(coord_check_dict), save_path)
+        print(f"Saved to {save_path}")
+        exit(1)
+
+
     cfm = CFM(
         model=dit,
         num_mel_channels=cfg.dataset.n_mel_channels,
     )
 
-    warmup_steps = int(cfg.training.max_steps * cfg.training.warmup_ratio)
+    warmup_steps = 0
     optimizer = configure_optimizer(
         model=cfm,
         lr=cfg.training.learning_rate,
@@ -136,35 +174,36 @@ def main(cfg: DictConfig):
         save_weights_only=cfg.training.save_weights_only,
     )
 
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    wandb_logger = WandbLogger(
-        project=cfg.training.wandb_project,
-        name=cfg.training.wandb_run_name,
-        id=cfg.model.get('wandb_resume_id', None),
-        resume='allow',
-    )
-    if wandb_logger.experiment.config:
-        # Merge with existing config, giving priority to existing values
-        wandb_logger.experiment.config.update(cfg_dict, allow_val_change=True)
-    else:
-        # If no existing config, set it directly
-        wandb_logger.experiment.config.update(cfg_dict)
+    # cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    # wandb_logger = WandbLogger(
+    #     project=cfg.training.wandb_project,
+    #     name=cfg.training.wandb_run_name,
+    #     id=cfg.model.get('wandb_resume_id', None),
+    #     resume='allow',
+    # )
+    # if wandb_logger.experiment.config:
+    #     # Merge with existing config, giving priority to existing values
+    #     wandb_logger.experiment.config.update(cfg_dict, allow_val_change=True)
+    # else:
+    #     # If no existing config, set it directly
+    #     wandb_logger.experiment.config.update(cfg_dict)
 
 
     trainer = pl.Trainer(
-        max_steps=cfg.training.max_steps,
+        max_steps=10,
         accelerator='gpu',
         devices='auto',
         strategy='auto',
         precision='bf16-mixed',
         accumulate_grad_batches=cfg.training.grad_accumulation_steps,
         callbacks=[checkpoint_callback, CustomProgressBar()],
-        logger=wandb_logger,
+        #logger=wandb_logger,
         val_check_interval=cfg.training.test_per_steps,
         check_val_every_n_epoch=None,
         gradient_clip_val=cfg.training.max_grad_norm,
         gradient_clip_algorithm='norm',
         log_every_n_steps=1,
+        num_sanity_val_steps=0
     )
 
     optimizer.train()
@@ -188,6 +227,7 @@ def main(cfg: DictConfig):
             collate_fn=collate_fn,
         ),
     )
+    save_coord_check_dict()
 
 if __name__ == "__main__":
     main()

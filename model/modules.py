@@ -182,7 +182,7 @@ class Attention(nn.Module):
         self.num_heads = int(dim // head_dim)
         self.inner_dim = dim
         self.dropout = dropout
-        self.scale = 1 / dim
+        self.scale = 1 / math.sqrt(dim)
 
         self.q_proj = nn.Linear(dim, self.inner_dim)
         self.k_proj = nn.Linear(dim, self.inner_dim)

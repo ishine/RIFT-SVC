@@ -107,6 +107,7 @@ class DiT(nn.Module):
                 depth_std = self.init_std / math.sqrt(2 * self.depth * self.mup_multipler)
                 torch.nn.init.normal_(block.attn.attn_out.weight, mean=0.0, std=depth_std)
                 torch.nn.init.normal_(block.mlp.mlp_out.weight, mean=0.0, std=depth_std)
+                torch.nn.init.normal_(block.attn_norm.proj.weight, mean=0.0, std=depth_std)
 
         torch.nn.init.constant_(self.norm_out.proj.weight, 0)
         torch.nn.init.constant_(self.norm_out.proj.bias, 0)
@@ -115,7 +116,7 @@ class DiT(nn.Module):
 
     def _init_weights(self, module: nn.Module):
         if isinstance(module, nn.Linear):
-            init_std = self.init_std / self.mup_multipler if self.mup_enabled else self.init_std
+            init_std = self.init_std / math.sqrt(self.mup_multipler) if self.mup_enabled else self.init_std
             torch.nn.init.normal_(module.weight, mean=0.0, std=init_std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)

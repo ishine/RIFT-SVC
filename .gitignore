@@ -5,6 +5,8 @@ wandb/*
 outputs/*
 ckpts/*
 mels/*
+lightning_logs/*
+coord_check/*
 
 .vscode/*
 .cache/*
